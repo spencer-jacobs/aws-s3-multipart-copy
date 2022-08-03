@@ -1,24 +1,38 @@
-'use strict';
+"use strict";
 
-const _ = require('lodash');
+const {
+    S3Client,
+    CreateMultipartUploadCommand,
+    UploadPartCopyCommand,
+    AbortMultipartUploadCommand,
+    ListPartsCommand,
+    CompleteMultipartUploadCommand,
+} = require("@aws-sdk/client-s3");
+const _ = require("lodash");
 
 const COPY_PART_SIZE_MINIMUM_BYTES = 5242880; // 5MB in bytes
 const DEFAULT_COPY_PART_SIZE_BYTES = 50000000; // 50 MB in bytes
-const DEFAULT_COPIED_OBJECT_PERMISSIONS = 'private';
+const DEFAULT_COPIED_OBJECT_PERMISSIONS = "private";
 
-let s3, logger;
+/** @type {S3Client | undefined} */
+let s3Client;
+let logger;
 
-const init = function (aws_s3_object, initialized_logger) {
-    s3 = aws_s3_object;
+const init = function (client, initialized_logger) {
+    s3Client = client;
     logger = initialized_logger;
 
-    if (!_.get(s3, '__proto__.api.fullName') || !(s3.__proto__.api.fullName === 'Amazon Simple Storage Service')) {
-        throw new Error('Invalid AWS.S3 object received');
+    if (!s3Client instanceof S3Client) {
+        throw new Error("Invalid S3Client object received");
     } else {
-        if (logger && typeof logger.info === 'function' && typeof logger.error === 'function') {
-            logger.info({ msg: 'S3 client initialized successfully' });
+        if (
+            logger &&
+            typeof logger.info === "function" &&
+            typeof logger.error === "function"
+        ) {
+            logger.info({ msg: "S3 client initialized successfully" });
         } else {
-            throw new Error('Invalid logger object received');
+            throw new Error("Invalid logger object received");
         }
     }
 };
@@ -29,104 +43,242 @@ const init = function (aws_s3_object, initialized_logger) {
  * (note that copy_part_size_bytes, copied_object_permissions, expiration_period are optional and will be assigned with default values if not given)
  * @param {*} request_context optional parameter for logging purposes
  */
-const copyObjectMultipart = async function ({ source_bucket, object_key, destination_bucket, copied_object_name, object_size, copy_part_size_bytes, copied_object_permissions, expiration_period, server_side_encryption, content_type, content_disposition, content_encoding, content_language, metadata, cache_control, storage_class}, request_context) {
-    const upload_id = await initiateMultipartCopy(destination_bucket, copied_object_name, copied_object_permissions, expiration_period, request_context, server_side_encryption, content_type, content_disposition,  content_encoding, content_language, metadata, cache_control, storage_class);
-    const partitionsRangeArray = calculatePartitionsRangeArray(object_size, copy_part_size_bytes);
+const copyObjectMultipart = async function (
+    {
+        source_bucket,
+        object_key,
+        destination_bucket,
+        copied_object_name,
+        object_size,
+        copy_part_size_bytes,
+        copied_object_permissions,
+        expiration_period,
+        server_side_encryption,
+        content_type,
+        content_disposition,
+        content_encoding,
+        content_language,
+        metadata,
+        cache_control,
+        storage_class,
+    },
+    request_context
+) {
+    const upload_id = await initiateMultipartCopy(
+        destination_bucket,
+        copied_object_name,
+        copied_object_permissions,
+        expiration_period,
+        request_context,
+        server_side_encryption,
+        content_type,
+        content_disposition,
+        content_encoding,
+        content_language,
+        metadata,
+        cache_control,
+        storage_class
+    );
+    const partitionsRangeArray = calculatePartitionsRangeArray(
+        object_size,
+        copy_part_size_bytes
+    );
     const copyPartFunctionsArray = [];
 
     partitionsRangeArray.forEach((partitionRange, index) => {
-        copyPartFunctionsArray.push(copyPart(source_bucket, destination_bucket, index + 1, object_key, partitionRange, copied_object_name, upload_id));
+        copyPartFunctionsArray.push(
+            copyPart(
+                source_bucket,
+                destination_bucket,
+                index + 1,
+                object_key,
+                partitionRange,
+                copied_object_name,
+                upload_id
+            )
+        );
     });
 
     return Promise.all(copyPartFunctionsArray)
         .then((copy_results) => {
-            logger.info({ msg: `copied all parts successfully: ${JSON.stringify(copy_results)}`, context: request_context });
+            logger.info({
+                msg: `copied all parts successfully: ${JSON.stringify(
+                    copy_results
+                )}`,
+                context: request_context,
+            });
 
-            const copyResultsForCopyCompletion = prepareResultsForCopyCompletion(copy_results);
-            return completeMultipartCopy(destination_bucket, copyResultsForCopyCompletion, copied_object_name, upload_id, request_context);
+            const copyResultsForCopyCompletion =
+                prepareResultsForCopyCompletion(copy_results);
+            return completeMultipartCopy(
+                destination_bucket,
+                copyResultsForCopyCompletion,
+                copied_object_name,
+                upload_id,
+                request_context
+            );
         })
         .catch(() => {
-            return abortMultipartCopy(destination_bucket, copied_object_name, upload_id, request_context);
+            return abortMultipartCopy(
+                destination_bucket,
+                copied_object_name,
+                upload_id,
+                request_context
+            );
         });
 };
 
-function initiateMultipartCopy(destination_bucket, copied_object_name, copied_object_permissions, expiration_period, request_context, server_side_encryption, content_type, content_disposition, content_encoding, content_language, metadata, cache_control, storage_class) {
+function initiateMultipartCopy(
+    destination_bucket,
+    copied_object_name,
+    copied_object_permissions,
+    expiration_period,
+    request_context,
+    server_side_encryption,
+    content_type,
+    content_disposition,
+    content_encoding,
+    content_language,
+    metadata,
+    cache_control,
+    storage_class
+) {
     const params = {
         Bucket: destination_bucket,
         Key: copied_object_name,
-        ACL: copied_object_permissions || DEFAULT_COPIED_OBJECT_PERMISSIONS
+        ACL: copied_object_permissions || DEFAULT_COPIED_OBJECT_PERMISSIONS,
     };
-    expiration_period ? params.Expires = expiration_period : null;
-    content_type ? params.ContentType = content_type : null;
-    content_disposition ? params.ContentDisposition = content_disposition : null;
-    content_encoding ? params.ContentEncoding = content_encoding : null;
-    content_language ? params.ContentLanguage = content_language : null;
-    metadata ? params.Metadata = metadata : null;
-    cache_control ? params.CacheControl = cache_control : null;
-    server_side_encryption ? params.ServerSideEncryption = server_side_encryption : null;
-    storage_class ? params.StorageClass = storage_class : null;
+    expiration_period ? (params.Expires = expiration_period) : null;
+    content_type ? (params.ContentType = content_type) : null;
+    content_disposition
+        ? (params.ContentDisposition = content_disposition)
+        : null;
+    content_encoding ? (params.ContentEncoding = content_encoding) : null;
+    content_language ? (params.ContentLanguage = content_language) : null;
+    metadata ? (params.Metadata = metadata) : null;
+    cache_control ? (params.CacheControl = cache_control) : null;
+    server_side_encryption
+        ? (params.ServerSideEncryption = server_side_encryption)
+        : null;
+    storage_class ? (params.StorageClass = storage_class) : null;
 
-    return s3.createMultipartUpload(params).promise()
+    const command = new CreateMultipartUploadCommand(params);
+
+    return s3Client
+        .send(command)
         .then((result) => {
-            logger.info({ msg: `multipart copy initiated successfully: ${JSON.stringify(result)}`, context: request_context });
+            logger.info({
+                msg: `multipart copy initiated successfully: ${JSON.stringify(
+                    result
+                )}`,
+                context: request_context,
+            });
             return Promise.resolve(result.UploadId);
         })
         .catch((err) => {
-            logger.error({ msg: 'multipart copy failed to initiate', context: request_context, error: err });
+            logger.error({
+                msg: "multipart copy failed to initiate",
+                context: request_context,
+                error: err,
+            });
             return Promise.reject(err);
         });
 }
 
-function copyPart(source_bucket, destination_bucket, part_number, object_key, partition_range, copied_object_name, upload_id) {
-    const encodedSourceKey = encodeURIComponent(`${source_bucket}/${object_key}`);
+function copyPart(
+    source_bucket,
+    destination_bucket,
+    part_number,
+    object_key,
+    partition_range,
+    copied_object_name,
+    upload_id
+) {
+    const encodedSourceKey = encodeURIComponent(
+        `${source_bucket}/${object_key}`
+    );
     const params = {
         Bucket: destination_bucket,
         CopySource: encodedSourceKey,
-        CopySourceRange: 'bytes=' + partition_range,
+        CopySourceRange: "bytes=" + partition_range,
         Key: copied_object_name,
         PartNumber: part_number,
-        UploadId: upload_id
+        UploadId: upload_id,
     };
 
-    return s3.uploadPartCopy(params).promise()
+    const command = new UploadPartCopyCommand(params);
+
+    return s3Client
+        .send(command)
         .then((result) => {
-            logger.info({ msg: `CopyPart ${part_number} succeeded: ${JSON.stringify(result)}` });
+            logger.info({
+                msg: `CopyPart ${part_number} succeeded: ${JSON.stringify(
+                    result
+                )}`,
+            });
             return Promise.resolve(result);
         })
         .catch((err) => {
-            logger.error({ msg: `CopyPart ${part_number} Failed: ${JSON.stringify(err)}`, error: err });
+            logger.error({
+                msg: `CopyPart ${part_number} Failed: ${JSON.stringify(err)}`,
+                error: err,
+            });
             return Promise.reject(err);
-        })
+        });
 }
 
-function abortMultipartCopy(destination_bucket, copied_object_name, upload_id, request_context) {
+function abortMultipartCopy(
+    destination_bucket,
+    copied_object_name,
+    upload_id,
+    request_context
+) {
     const params = {
         Bucket: destination_bucket,
         Key: copied_object_name,
-        UploadId: upload_id
+        UploadId: upload_id,
     };
 
-    return s3.abortMultipartUpload(params).promise()
+    const command = new AbortMultipartUploadCommand(params);
+
+    return s3Client
+        .send(command)
         .then(() => {
-            return s3.listParts(params).promise()
+            const listCommand = new ListPartsCommand(params);
+            return s3Client.send(listCommand);
         })
         .catch((err) => {
-            logger.error({ msg: 'abort multipart copy failed', context: request_context, error: err });
+            logger.error({
+                msg: "abort multipart copy failed",
+                context: request_context,
+                error: err,
+            });
 
             return Promise.reject(err);
         })
         .then((parts_list) => {
             if (parts_list.Parts.length > 0) {
-                const err = new Error('Abort procedure passed but copy parts were not removed');
+                const err = new Error(
+                    "Abort procedure passed but copy parts were not removed"
+                );
                 err.details = parts_list;
 
-                logger.error({ msg: 'abort multipart copy failed, copy parts were not removed', context: request_context, error: err });
+                logger.error({
+                    msg: "abort multipart copy failed, copy parts were not removed",
+                    context: request_context,
+                    error: err,
+                });
 
                 return Promise.reject(err);
             } else {
-                logger.info({ msg: `multipart copy aborted successfully: ${JSON.stringify(parts_list)}`, context: request_context });
+                logger.info({
+                    msg: `multipart copy aborted successfully: ${JSON.stringify(
+                        parts_list
+                    )}`,
+                    context: request_context,
+                });
 
-                const err = new Error('multipart copy aborted');
+                const err = new Error("multipart copy aborted");
                 err.details = params;
 
                 return Promise.reject(err);
@@ -134,23 +286,41 @@ function abortMultipartCopy(destination_bucket, copied_object_name, upload_id, r
         });
 }
 
-function completeMultipartCopy(destination_bucket, ETags_array, copied_object_name, upload_id, request_context) {
+function completeMultipartCopy(
+    destination_bucket,
+    ETags_array,
+    copied_object_name,
+    upload_id,
+    request_context
+) {
     const params = {
         Bucket: destination_bucket,
         Key: copied_object_name,
         MultipartUpload: {
-            Parts: ETags_array
+            Parts: ETags_array,
         },
-        UploadId: upload_id
+        UploadId: upload_id,
     };
 
-    return s3.completeMultipartUpload(params).promise()
+    const command = new CompleteMultipartUploadCommand(params);
+
+    return s3Client
+        .send(command)
         .then((result) => {
-            logger.info({ msg: `multipart copy completed successfully: ${JSON.stringify(result)}`, context: request_context });
+            logger.info({
+                msg: `multipart copy completed successfully: ${JSON.stringify(
+                    result
+                )}`,
+                context: request_context,
+            });
             return Promise.resolve(result);
         })
         .catch((err) => {
-            logger.error({ msg: 'Multipart upload failed', context: request_context, error: err });
+            logger.error({
+                msg: "Multipart upload failed",
+                context: request_context,
+                error: err,
+            });
             return Promise.reject(err);
         });
 }
@@ -164,16 +334,26 @@ function calculatePartitionsRangeArray(object_size, copy_part_size_bytes) {
 
     for (index = 0; index < numOfPartitions; index++) {
         const nextIndex = index + 1;
-        if (nextIndex === numOfPartitions && remainder < COPY_PART_SIZE_MINIMUM_BYTES) {
-            partition = (index * copy_part_size) + '-' + ((nextIndex) * copy_part_size + remainder - 1);
+        if (
+            nextIndex === numOfPartitions &&
+            remainder < COPY_PART_SIZE_MINIMUM_BYTES
+        ) {
+            partition =
+                index * copy_part_size +
+                "-" +
+                (nextIndex * copy_part_size + remainder - 1);
         } else {
-            partition = (index * copy_part_size) + '-' + ((nextIndex) * copy_part_size - 1);
+            partition =
+                index * copy_part_size + "-" + (nextIndex * copy_part_size - 1);
         }
         partitions.push(partition);
     }
 
     if (numOfPartitions == 0 || remainder >= COPY_PART_SIZE_MINIMUM_BYTES) {
-        partition = (index * copy_part_size) + '-' + (index * copy_part_size + remainder - 1);
+        partition =
+            index * copy_part_size +
+            "-" +
+            (index * copy_part_size + remainder - 1);
         partitions.push(partition);
     }
 
@@ -195,5 +375,5 @@ function prepareResultsForCopyCompletion(copy_parts_results_array) {
 
 module.exports = {
     init: init,
-    copyObjectMultipart: copyObjectMultipart
+    copyObjectMultipart: copyObjectMultipart,
 };

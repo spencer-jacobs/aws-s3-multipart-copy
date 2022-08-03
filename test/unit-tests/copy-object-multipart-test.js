@@ -6,7 +6,14 @@ let bunyan = require("bunyan"),
     deepCopy = require("deepcopy"),
     rewire = require("rewire"),
     s3Module = rewire("../../src/copy-object-multipart"),
-    AWS = require("aws-sdk"),
+    {
+        S3Client,
+        CreateMultipartUploadCommand,
+        AbortMultipartUploadCommand,
+        CompleteMultipartUploadCommand,
+        UploadPartCopyCommand,
+        ListPartsCommand,
+    } = require("@aws-sdk/client-s3"),
     pkginfo = require("pkginfo")(module, "version"),
     testData = require("../utils/unit-tests-data"),
     APP_VERSION = module.exports.version,
@@ -18,20 +25,37 @@ let bunyan = require("bunyan"),
         serializers: { err: bunyan.stdSerializers.err },
     });
 
-let sandBox,
-    loggerInfoSpy,
-    loggerErrorSpy,
-    createMultipartUploadStub,
-    uploadPartCopyStub,
-    completeMultipartUploadStub,
-    abortMultipartUploadStub,
-    listPartsStub,
-    s3;
+let loggerInfoSpy, loggerErrorSpy, sendStub, listPartsStub, s3Client;
 
-describe("AWS S3 multupart copy client unit tests", function () {
+let createMultipartUploadStubCallCount = 0;
+let createMultipartUploadArgs = [];
+let abortMultipartUploadStubCallCount = 0;
+let abortMultipartUploadArgs = [];
+let completeMultipartUploadStubCallCount = 0;
+let completeMultipartUploadArgs = [];
+let uploadPartCopyStubCallCount = 0;
+let uploadPartCopyArgs = [];
+let listPartsStubCallCount = 0;
+let listPartsArgs = [];
+
+describe("AWS S3 multipart copy client unit tests", function () {
     before(() => {
         loggerInfoSpy = sinon.spy(logger, "info");
         loggerErrorSpy = sinon.spy(logger, "error");
+    });
+
+    beforeEach(() => {
+        createMultipartUploadStubCallCount = 0;
+        uploadPartCopyStubCallCount = 0;
+        completeMultipartUploadStubCallCount = 0;
+        abortMultipartUploadStubCallCount = 0;
+        listPartsStubCallCount = 0;
+
+        createMultipartUploadArgs = [];
+        uploadPartCopyArgs = [];
+        completeMultipartUploadArgs = [];
+        abortMultipartUploadArgs = [];
+        listPartsArgs = [];
     });
 
     afterEach(() => {
@@ -44,23 +68,23 @@ describe("AWS S3 multupart copy client unit tests", function () {
 
     describe("Testing init function", function () {
         it("Should pass when given valid s3 and logger objects", function () {
-            s3 = new AWS.S3();
+            s3Client = new S3Client();
 
-            s3Module.init(s3, logger);
+            s3Module.init(s3Client, logger);
 
             should(loggerInfoSpy.calledOnce).equal(true);
             should(loggerInfoSpy.args[0][0]).eql({
                 msg: "S3 client initialized successfully",
             });
-            should(s3Module.__get__("s3")).equal(s3);
+            should(s3Module.__get__("s3Client")).equal(s3Client);
         });
 
         it("Should throw error when given an invalid s3 object", function () {
-            let notS3 = [];
-            let expected_error = new Error("Invalid AWS.S3 object received");
+            let nots3Client = [];
+            let expected_error = new Error("Invalid S3Client object received");
 
             try {
-                s3Module.init(notS3, logger);
+                s3Module.init(nots3Client, logger);
             } catch (err) {
                 should(loggerInfoSpy.notCalled).equal(true);
                 should(err).eql(expected_error);
@@ -68,7 +92,7 @@ describe("AWS S3 multupart copy client unit tests", function () {
         });
 
         it("Should throw error when s3 object is not passed", function () {
-            let expected_error = new Error("Invalid AWS.S3 object received");
+            let expected_error = new Error("Invalid S3Client object received");
 
             try {
                 s3Module.init(undefined, logger);
@@ -80,11 +104,11 @@ describe("AWS S3 multupart copy client unit tests", function () {
 
         it("Should throw error when given an invalid logger object", function () {
             let notLogger = [];
-            let s3 = new AWS.S3();
+            let s3Client = new S3Client();
             let expected_error = new Error("Invalid logger object received");
 
             try {
-                s3Module.init(s3, notLogger);
+                s3Module.init(s3Client, notLogger);
             } catch (err) {
                 should(loggerInfoSpy.notCalled).equal(true);
                 should(err).eql(expected_error);
@@ -92,11 +116,11 @@ describe("AWS S3 multupart copy client unit tests", function () {
         });
 
         it("Should throw error when logger object is not passed", function () {
-            s3 = new AWS.S3();
+            s3Client = new S3Client();
             let expected_error = new Error("Invalid logger object received");
 
             try {
-                s3Module.init(s3, undefined);
+                s3Module.init(s3Client, undefined);
             } catch (err) {
                 should(loggerInfoSpy.notCalled).equal(true);
                 should(err).eql(expected_error);
@@ -106,30 +130,40 @@ describe("AWS S3 multupart copy client unit tests", function () {
 
     describe("Testing copyObjectMultipart", function () {
         before(() => {
-            s3 = new AWS.S3();
-            s3Module.init(s3, logger);
+            s3Client = new S3Client();
+            s3Module.init(s3Client, logger);
             loggerInfoSpy.resetHistory();
-            createMultipartUploadStub = sinon.stub(s3, "createMultipartUpload");
-            uploadPartCopyStub = sinon.stub(s3, "uploadPartCopy");
-            completeMultipartUploadStub = sinon.stub(
-                s3,
-                "completeMultipartUpload"
-            );
-            abortMultipartUploadStub = sinon.stub(s3, "abortMultipartUpload");
-            listPartsStub = sinon.stub(s3, "listParts");
+            loggerErrorSpy.resetHistory();
+            sendStub = sinon.stub(s3Client, "send");
+        });
+
+        beforeEach(() => {
+            sendStub.callsFake((command, options) => {
+                if (command instanceof CreateMultipartUploadCommand) {
+                    createMultipartUploadStubCallCount++;
+                    createMultipartUploadArgs.push(command.input);
+                    return testData.createMultipartUploadStub_positive_response;
+                } else if (command instanceof UploadPartCopyCommand) {
+                    uploadPartCopyStubCallCount++;
+                    uploadPartCopyArgs.push(command.input);
+                    return testData.uploadPartCopyStub_positive_response;
+                } else if (command instanceof CompleteMultipartUploadCommand) {
+                    completeMultipartUploadStubCallCount++;
+                    completeMultipartUploadArgs.push(command.input);
+                    return testData.completeMultipartUploadStub_positive_response;
+                } else if (command instanceof AbortMultipartUploadCommand) {
+                    abortMultipartUploadStubCallCount++;
+                    abortMultipartUploadArgs.push(command.input);
+                    return testData.abortMultipartUploadStub_positive_response;
+                } else if (command instanceof ListPartsCommand) {
+                    listPartsStubCallCount++;
+                    listPartsArgs.push(command.input);
+                    return testData.listPartsStub_positive_response;
+                }
+            });
         });
 
         it("Should succeed with all variables passed", function () {
-            createMultipartUploadStub.returns(
-                testData.createMultipartUploadStub_positive_response
-            );
-            uploadPartCopyStub.returns(
-                testData.uploadPartCopyStub_positive_response
-            );
-            completeMultipartUploadStub.returns(
-                testData.completeMultipartUploadStub_positive_response
-            );
-
             return s3Module
                 .copyObjectMultipart(
                     testData.full_request_options,
@@ -143,35 +177,26 @@ describe("AWS S3 multupart copy client unit tests", function () {
                             JSON.stringify({ UploadId: "1a2b3c4d" }),
                         context: "request_context",
                     });
-                    should(createMultipartUploadStub.calledOnce).equal(true);
-                    should(createMultipartUploadStub.args[0][0]).eql(
+
+                    should(createMultipartUploadStubCallCount).equal(1);
+                    should(createMultipartUploadArgs[0]).eql(
                         testData.expected_createMultipartUpload_args
                     );
-                    should(uploadPartCopyStub.calledTwice).equal(true);
-                    should(uploadPartCopyStub.args[0][0]).eql(
+                    should(uploadPartCopyStubCallCount).equal(2);
+                    should(uploadPartCopyArgs[0]).eql(
                         testData.expected_uploadPartCopy_firstCallArgs
                     );
-                    should(uploadPartCopyStub.args[1][0]).eql(
+                    should(uploadPartCopyArgs[1]).eql(
                         testData.expected_uploadPartCopy_secondCallArgs
                     );
-                    should(completeMultipartUploadStub.calledOnce).equal(true);
-                    should(completeMultipartUploadStub.args[0][0]).eql(
+                    should(completeMultipartUploadStubCallCount).equal(1);
+                    should(completeMultipartUploadArgs[0]).eql(
                         testData.expected_completeMultipartUploadStub_args
                     );
                 });
         });
 
         it("Should succeed with all mandatory variables passed", function () {
-            createMultipartUploadStub.returns(
-                testData.createMultipartUploadStub_positive_response
-            );
-            uploadPartCopyStub.returns(
-                testData.uploadPartCopyStub_positive_response
-            );
-            completeMultipartUploadStub.returns(
-                testData.completeMultipartUploadStub_positive_response
-            );
-
             let expected_uploadPartCopy_secondCallArgs = deepCopy(
                 testData.expected_uploadPartCopy_secondCallArgs
             );
@@ -197,35 +222,25 @@ describe("AWS S3 multupart copy client unit tests", function () {
                             JSON.stringify({ UploadId: "1a2b3c4d" }),
                         context: "request_context",
                     });
-                    should(createMultipartUploadStub.calledOnce).equal(true);
-                    should(createMultipartUploadStub.args[0][0]).eql(
+                    should(createMultipartUploadStubCallCount).equal(1);
+                    should(createMultipartUploadArgs[0]).eql(
                         expected_createMultipartUpload_args
                     );
-                    should(uploadPartCopyStub.calledTwice).equal(true);
-                    should(uploadPartCopyStub.args[0][0]).eql(
+                    should(uploadPartCopyStubCallCount).equal(2);
+                    should(uploadPartCopyArgs[0]).eql(
                         testData.expected_uploadPartCopy_firstCallArgs
                     );
-                    should(uploadPartCopyStub.args[1][0]).eql(
+                    should(uploadPartCopyArgs[1]).eql(
                         expected_uploadPartCopy_secondCallArgs
                     );
-                    should(completeMultipartUploadStub.calledOnce).equal(true);
-                    should(completeMultipartUploadStub.args[0][0]).eql(
+                    should(completeMultipartUploadStubCallCount).equal(1);
+                    should(completeMultipartUploadArgs[0]).eql(
                         testData.expected_completeMultipartUploadStub_args
                     );
                 });
         });
 
         it("Should url-encode CopySource key", function () {
-            createMultipartUploadStub.returns(
-                testData.createMultipartUploadStub_positive_response
-            );
-            uploadPartCopyStub.returns(
-                testData.uploadPartCopyStub_positive_response
-            );
-            completeMultipartUploadStub.returns(
-                testData.completeMultipartUploadStub_positive_response
-            );
-
             const partial_request_options = deepCopy(
                 testData.partial_request_options
             );
@@ -249,26 +264,16 @@ describe("AWS S3 multupart copy client unit tests", function () {
                     testData.request_context
                 )
                 .then(() => {
-                    should(uploadPartCopyStub.args[0][0]).eql(
+                    should(uploadPartCopyArgs[0]).eql(
                         expected_uploadPartCopy_firstCallArgs
                     );
-                    should(uploadPartCopyStub.args[1][0]).eql(
+                    should(uploadPartCopyArgs[1]).eql(
                         expected_uploadPartCopy_secondCallArgs
                     );
                 });
         });
 
         it("Should succeed with all variables passed and object_size is smaller then copy_part_size_bytes", function () {
-            createMultipartUploadStub.returns(
-                testData.createMultipartUploadStub_positive_response
-            );
-            uploadPartCopyStub.returns(
-                testData.uploadPartCopyStub_positive_response
-            );
-            completeMultipartUploadStub.returns(
-                testData.completeMultipartUploadStub_positive_response
-            );
-
             let full_request_options = deepCopy(testData.full_request_options);
             full_request_options.object_size = 25000000;
             let expected_uploadPartCopy_firstCallArgs = deepCopy(
@@ -296,25 +301,45 @@ describe("AWS S3 multupart copy client unit tests", function () {
                             JSON.stringify({ UploadId: "1a2b3c4d" }),
                         context: "request_context",
                     });
-                    should(createMultipartUploadStub.calledOnce).equal(true);
-                    should(createMultipartUploadStub.args[0][0]).eql(
+                    should(createMultipartUploadStubCallCount).equal(1);
+                    should(createMultipartUploadArgs[0]).eql(
                         testData.expected_createMultipartUpload_args
                     );
-                    should(uploadPartCopyStub.calledOnce).equal(true);
-                    should(uploadPartCopyStub.args[0][0]).eql(
+                    should(uploadPartCopyStubCallCount).equal(1);
+                    should(uploadPartCopyArgs[0]).eql(
                         expected_uploadPartCopy_firstCallArgs
                     );
-                    should(completeMultipartUploadStub.calledOnce).equal(true);
-                    should(completeMultipartUploadStub.args[0][0]).eql(
+                    should(completeMultipartUploadStubCallCount).equal(1);
+                    should(completeMultipartUploadArgs[0]).eql(
                         expected_completeMultipartUploadStub_args
                     );
                 });
         });
 
         it("Should fail due to createMultipartUpload error and not call abortMultipartCopy", function () {
-            createMultipartUploadStub.returns(
-                testData.all_stubs_error_response
-            );
+            sendStub.callsFake((command, options) => {
+                if (command instanceof CreateMultipartUploadCommand) {
+                    createMultipartUploadStubCallCount++;
+                    createMultipartUploadArgs.push(command.input);
+                    return testData.all_stubs_error_response;
+                } else if (command instanceof UploadPartCopyCommand) {
+                    uploadPartCopyStubCallCount++;
+                    uploadPartCopyArgs.push(command.input);
+                    return testData.uploadPartCopyStub_positive_response;
+                } else if (command instanceof CompleteMultipartUploadCommand) {
+                    completeMultipartUploadStubCallCount++;
+                    completeMultipartUploadArgs.push(command.input);
+                    return testData.completeMultipartUploadStub_positive_response;
+                } else if (command instanceof AbortMultipartUploadCommand) {
+                    abortMultipartUploadStubCallCount++;
+                    abortMultipartUploadArgs.push(command.input);
+                    return testData.abortMultipartUploadStub_positive_response;
+                } else if (command instanceof ListPartsCommand) {
+                    listPartsStubCallCount++;
+                    listPartsArgs.push(command.input);
+                    return testData.listPartsStub_positive_response;
+                }
+            });
 
             return s3Module
                 .copyObjectMultipart(
@@ -333,23 +358,38 @@ describe("AWS S3 multupart copy client unit tests", function () {
                         context: "request_context",
                         error: "test_error",
                     });
-                    should(uploadPartCopyStub.notCalled).equal(true);
-                    should(completeMultipartUploadStub.notCalled).equal(true);
-                    should(abortMultipartUploadStub.notCalled).equal(true);
-                    should(listPartsStub.notCalled).equal(true);
+                    should(uploadPartCopyStubCallCount).equal(0);
+                    should(completeMultipartUploadStubCallCount).equal(0);
+                    should(abortMultipartUploadStubCallCount).equal(0);
+                    should(listPartsStubCallCount).equal(0);
                     should(err).eql("test_error");
                 });
         });
 
         it("Should call abortMultipartCopy upon error from uploadPartCopy error and succeed", function () {
-            createMultipartUploadStub.returns(
-                testData.createMultipartUploadStub_positive_response
-            );
-            uploadPartCopyStub.returns(testData.all_stubs_error_response);
-            abortMultipartUploadStub.returns(
-                testData.abortMultipartUploadStub_positive_response
-            );
-            listPartsStub.returns(testData.listPartsStub_positive_response);
+            sendStub.callsFake((command, options) => {
+                if (command instanceof CreateMultipartUploadCommand) {
+                    createMultipartUploadStubCallCount++;
+                    createMultipartUploadArgs.push(command.input);
+                    return testData.createMultipartUploadStub_positive_response;
+                } else if (command instanceof UploadPartCopyCommand) {
+                    uploadPartCopyStubCallCount++;
+                    uploadPartCopyArgs.push(command.input);
+                    return testData.all_stubs_error_response;
+                } else if (command instanceof CompleteMultipartUploadCommand) {
+                    completeMultipartUploadStubCallCount++;
+                    completeMultipartUploadArgs.push(command.input);
+                    return testData.completeMultipartUploadStub_positive_response;
+                } else if (command instanceof AbortMultipartUploadCommand) {
+                    abortMultipartUploadStubCallCount++;
+                    abortMultipartUploadArgs.push(command.input);
+                    return testData.abortMultipartUploadStub_positive_response;
+                } else if (command instanceof ListPartsCommand) {
+                    listPartsStubCallCount++;
+                    listPartsArgs.push(command.input);
+                    return testData.listPartsStub_positive_response;
+                }
+            });
 
             let expected_error = new Error("multipart copy aborted");
             expected_error.details = {
@@ -385,23 +425,23 @@ describe("AWS S3 multupart copy client unit tests", function () {
                         msg: 'CopyPart 2 Failed: "test_error"',
                         error: "test_error",
                     });
-                    should(createMultipartUploadStub.calledOnce).equal(true);
-                    should(createMultipartUploadStub.args[0][0]).eql(
+                    should(createMultipartUploadStubCallCount).equal(1);
+                    should(createMultipartUploadArgs[0]).eql(
                         testData.expected_createMultipartUpload_args
                     );
-                    should(uploadPartCopyStub.calledTwice).equal(true);
-                    should(uploadPartCopyStub.args[0][0]).eql(
+                    should(uploadPartCopyStubCallCount).equal(2);
+                    should(uploadPartCopyArgs[0]).eql(
                         testData.expected_uploadPartCopy_firstCallArgs
                     );
-                    should(uploadPartCopyStub.args[1][0]).eql(
+                    should(uploadPartCopyArgs[1]).eql(
                         testData.expected_uploadPartCopy_secondCallArgs
                     );
-                    should(abortMultipartUploadStub.calledOnce).equal(true);
-                    should(abortMultipartUploadStub.args[0][0]).eql(
+                    should(abortMultipartUploadStubCallCount).equal(1);
+                    should(abortMultipartUploadArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
-                    should(listPartsStub.calledOnce).equal(true);
-                    should(listPartsStub.args[0][0]).eql(
+                    should(listPartsStubCallCount).equal(1);
+                    should(listPartsArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
                     should(err).eql(testData.expected_abort_rejection_response);
@@ -409,19 +449,29 @@ describe("AWS S3 multupart copy client unit tests", function () {
         });
 
         it("Should call abortMultipartCopy upon error from completeMultipartUpload", function () {
-            createMultipartUploadStub.returns(
-                testData.createMultipartUploadStub_positive_response
-            );
-            uploadPartCopyStub.returns(
-                testData.uploadPartCopyStub_positive_response
-            );
-            completeMultipartUploadStub.returns(
-                testData.all_stubs_error_response
-            );
-            abortMultipartUploadStub.returns(
-                testData.abortMultipartUploadStub_positive_response
-            );
-            listPartsStub.returns(testData.listPartsStub_positive_response);
+            sendStub.callsFake((command, options) => {
+                if (command instanceof CreateMultipartUploadCommand) {
+                    createMultipartUploadStubCallCount++;
+                    createMultipartUploadArgs.push(command.input);
+                    return testData.createMultipartUploadStub_positive_response;
+                } else if (command instanceof UploadPartCopyCommand) {
+                    uploadPartCopyStubCallCount++;
+                    uploadPartCopyArgs.push(command.input);
+                    return testData.uploadPartCopyStub_positive_response;
+                } else if (command instanceof CompleteMultipartUploadCommand) {
+                    completeMultipartUploadStubCallCount++;
+                    completeMultipartUploadArgs.push(command.input);
+                    return testData.all_stubs_error_response;
+                } else if (command instanceof AbortMultipartUploadCommand) {
+                    abortMultipartUploadStubCallCount++;
+                    abortMultipartUploadArgs.push(command.input);
+                    return testData.abortMultipartUploadStub_positive_response;
+                } else if (command instanceof ListPartsCommand) {
+                    listPartsStubCallCount++;
+                    listPartsArgs.push(command.input);
+                    return testData.listPartsStub_positive_response;
+                }
+            });
 
             return s3Module
                 .copyObjectMultipart(
@@ -447,27 +497,27 @@ describe("AWS S3 multupart copy client unit tests", function () {
                         context: "request_context",
                         error: "test_error",
                     });
-                    should(createMultipartUploadStub.calledOnce).equal(true);
-                    should(createMultipartUploadStub.args[0][0]).eql(
+                    should(createMultipartUploadStubCallCount).equal(1);
+                    should(createMultipartUploadArgs[0]).eql(
                         testData.expected_createMultipartUpload_args
                     );
-                    should(uploadPartCopyStub.calledTwice).equal(true);
-                    should(uploadPartCopyStub.args[0][0]).eql(
+                    should(uploadPartCopyStubCallCount).equal(2);
+                    should(uploadPartCopyArgs[0]).eql(
                         testData.expected_uploadPartCopy_firstCallArgs
                     );
-                    should(uploadPartCopyStub.args[1][0]).eql(
+                    should(uploadPartCopyArgs[1]).eql(
                         testData.expected_uploadPartCopy_secondCallArgs
                     );
-                    should(completeMultipartUploadStub.calledOnce).equal(true);
-                    should(completeMultipartUploadStub.args[0][0]).eql(
+                    should(completeMultipartUploadStubCallCount).equal(1);
+                    should(completeMultipartUploadArgs[0]).eql(
                         testData.expected_completeMultipartUploadStub_args
                     );
-                    should(abortMultipartUploadStub.calledOnce).equal(true);
-                    should(abortMultipartUploadStub.args[0][0]).eql(
+                    should(abortMultipartUploadStubCallCount).equal(1);
+                    should(abortMultipartUploadArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
-                    should(listPartsStub.calledOnce).equal(true);
-                    should(listPartsStub.args[0][0]).eql(
+                    should(listPartsStubCallCount).equal(1);
+                    should(listPartsArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
                     should(err).eql(testData.expected_abort_rejection_response);
@@ -475,19 +525,29 @@ describe("AWS S3 multupart copy client unit tests", function () {
         });
 
         it("Should call abortMultipartCopy upon error from completeMultipartUpload and a list of parts returned from listParts", async function () {
-            createMultipartUploadStub.returns(
-                testData.createMultipartUploadStub_positive_response
-            );
-            uploadPartCopyStub.returns(
-                testData.uploadPartCopyStub_positive_response
-            );
-            completeMultipartUploadStub.returns(
-                testData.all_stubs_error_response
-            );
-            abortMultipartUploadStub.returns(
-                testData.abortMultipartUploadStub_positive_response
-            );
-            listPartsStub.returns(testData.listPartsStub_negative_response);
+            sendStub.callsFake((command, options) => {
+                if (command instanceof CreateMultipartUploadCommand) {
+                    createMultipartUploadStubCallCount++;
+                    createMultipartUploadArgs.push(command.input);
+                    return testData.createMultipartUploadStub_positive_response;
+                } else if (command instanceof UploadPartCopyCommand) {
+                    uploadPartCopyStubCallCount++;
+                    uploadPartCopyArgs.push(command.input);
+                    return testData.uploadPartCopyStub_positive_response;
+                } else if (command instanceof CompleteMultipartUploadCommand) {
+                    completeMultipartUploadStubCallCount++;
+                    completeMultipartUploadArgs.push(command.input);
+                    return testData.all_stubs_error_response;
+                } else if (command instanceof AbortMultipartUploadCommand) {
+                    abortMultipartUploadStubCallCount++;
+                    abortMultipartUploadArgs.push(command.input);
+                    return testData.abortMultipartUploadStub_positive_response;
+                } else if (command instanceof ListPartsCommand) {
+                    listPartsStubCallCount++;
+                    listPartsArgs.push(command.input);
+                    return testData.listPartsStub_negative_response;
+                }
+            });
 
             let expected_abortMultipartUpload_error = new Error(
                 "Abort procedure passed but copy parts were not removed"
@@ -496,7 +556,7 @@ describe("AWS S3 multupart copy client unit tests", function () {
                 Parts: ["part 1", "part 2"],
             };
             const uploadPartCopyStubResponse =
-                await testData.uploadPartCopyStub_positive_response.promise();
+                await testData.uploadPartCopyStub_positive_response;
             const error = new Error(
                 "Abort procedure passed but copy parts were not removed"
             );
@@ -534,27 +594,27 @@ describe("AWS S3 multupart copy client unit tests", function () {
                         context: "request_context",
                         error,
                     });
-                    should(createMultipartUploadStub.calledOnce).equal(true);
-                    should(createMultipartUploadStub.args[0][0]).eql(
+                    should(createMultipartUploadStubCallCount).equal(1);
+                    should(createMultipartUploadArgs[0]).eql(
                         testData.expected_createMultipartUpload_args
                     );
-                    should(uploadPartCopyStub.calledTwice).equal(true);
-                    should(uploadPartCopyStub.args[0][0]).eql(
+                    should(uploadPartCopyStubCallCount).equal(2);
+                    should(uploadPartCopyArgs[0]).eql(
                         testData.expected_uploadPartCopy_firstCallArgs
                     );
-                    should(uploadPartCopyStub.args[1][0]).eql(
+                    should(uploadPartCopyArgs[1]).eql(
                         testData.expected_uploadPartCopy_secondCallArgs
                     );
-                    should(completeMultipartUploadStub.calledOnce).equal(true);
-                    should(completeMultipartUploadStub.args[0][0]).eql(
+                    should(completeMultipartUploadStubCallCount).equal(1);
+                    should(completeMultipartUploadArgs[0]).eql(
                         testData.expected_completeMultipartUploadStub_args
                     );
-                    should(abortMultipartUploadStub.calledOnce).equal(true);
-                    should(abortMultipartUploadStub.args[0][0]).eql(
+                    should(abortMultipartUploadStubCallCount).equal(1);
+                    should(abortMultipartUploadArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
-                    should(listPartsStub.calledOnce).equal(true);
-                    should(listPartsStub.args[0][0]).eql(
+                    should(listPartsStubCallCount).equal(1);
+                    should(listPartsArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
                     should(err).eql(expected_abortMultipartUpload_error);
@@ -562,18 +622,32 @@ describe("AWS S3 multupart copy client unit tests", function () {
         });
 
         it("Should call abortMultipartCopy upon error from completeMultipartUpload and fail due to abortMultipartCopy error", async function () {
-            createMultipartUploadStub.returns(
-                testData.createMultipartUploadStub_positive_response
-            );
-            uploadPartCopyStub.returns(
-                testData.uploadPartCopyStub_positive_response
-            );
-            completeMultipartUploadStub.returns(
-                testData.all_stubs_error_response
-            );
-            abortMultipartUploadStub.returns(testData.all_stubs_error_response);
+            sendStub.callsFake((command, options) => {
+                if (command instanceof CreateMultipartUploadCommand) {
+                    createMultipartUploadStubCallCount++;
+                    createMultipartUploadArgs.push(command.input);
+                    return testData.createMultipartUploadStub_positive_response;
+                } else if (command instanceof UploadPartCopyCommand) {
+                    uploadPartCopyStubCallCount++;
+                    uploadPartCopyArgs.push(command.input);
+                    return testData.uploadPartCopyStub_positive_response;
+                } else if (command instanceof CompleteMultipartUploadCommand) {
+                    completeMultipartUploadStubCallCount++;
+                    completeMultipartUploadArgs.push(command.input);
+                    return testData.all_stubs_error_response;
+                } else if (command instanceof AbortMultipartUploadCommand) {
+                    abortMultipartUploadStubCallCount++;
+                    abortMultipartUploadArgs.push(command.input);
+                    return testData.all_stubs_error_response;
+                } else if (command instanceof ListPartsCommand) {
+                    listPartsStubCallCount++;
+                    listPartsArgs.push(command.input);
+                    return testData.listPartsStub_positive_response;
+                }
+            });
+
             const uploadPartCopyStubResponse =
-                await testData.uploadPartCopyStub_positive_response.promise();
+                await testData.uploadPartCopyStub_positive_response;
 
             return s3Module
                 .copyObjectMultipart(
@@ -607,23 +681,23 @@ describe("AWS S3 multupart copy client unit tests", function () {
                         context: "request_context",
                         error: "test_error",
                     });
-                    should(createMultipartUploadStub.calledOnce).equal(true);
-                    should(createMultipartUploadStub.args[0][0]).eql(
+                    should(createMultipartUploadStubCallCount).equal(1);
+                    should(createMultipartUploadArgs[0]).eql(
                         testData.expected_createMultipartUpload_args
                     );
-                    should(uploadPartCopyStub.calledTwice).equal(true);
-                    should(uploadPartCopyStub.args[0][0]).eql(
+                    should(uploadPartCopyStubCallCount).equal(2);
+                    should(uploadPartCopyArgs[0]).eql(
                         testData.expected_uploadPartCopy_firstCallArgs
                     );
-                    should(uploadPartCopyStub.args[1][0]).eql(
+                    should(uploadPartCopyArgs[1]).eql(
                         testData.expected_uploadPartCopy_secondCallArgs
                     );
-                    should(completeMultipartUploadStub.calledOnce).equal(true);
-                    should(completeMultipartUploadStub.args[0][0]).eql(
+                    should(completeMultipartUploadStubCallCount).equal(1);
+                    should(completeMultipartUploadArgs[0]).eql(
                         testData.expected_completeMultipartUploadStub_args
                     );
-                    should(abortMultipartUploadStub.calledOnce).equal(true);
-                    should(abortMultipartUploadStub.args[0][0]).eql(
+                    should(abortMultipartUploadStubCallCount).equal(1);
+                    should(abortMultipartUploadArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
                     should(err).equal("test_error");
@@ -631,21 +705,32 @@ describe("AWS S3 multupart copy client unit tests", function () {
         });
 
         it("Should call abortMultipartCopy upon error from completeMultipartUpload and fail due to listParts error", async function () {
-            createMultipartUploadStub.returns(
-                testData.createMultipartUploadStub_positive_response
-            );
-            uploadPartCopyStub.returns(
-                testData.uploadPartCopyStub_positive_response
-            );
-            completeMultipartUploadStub.returns(
-                testData.all_stubs_error_response
-            );
-            abortMultipartUploadStub.returns(
-                testData.abortMultipartUploadStub_positive_response
-            );
-            listPartsStub.returns(testData.all_stubs_error_response);
+            sendStub.callsFake((command, options) => {
+                if (command instanceof CreateMultipartUploadCommand) {
+                    createMultipartUploadStubCallCount++;
+                    createMultipartUploadArgs.push(command.input);
+                    return testData.createMultipartUploadStub_positive_response;
+                } else if (command instanceof UploadPartCopyCommand) {
+                    uploadPartCopyStubCallCount++;
+                    uploadPartCopyArgs.push(command.input);
+                    return testData.uploadPartCopyStub_positive_response;
+                } else if (command instanceof CompleteMultipartUploadCommand) {
+                    completeMultipartUploadStubCallCount++;
+                    completeMultipartUploadArgs.push(command.input);
+                    return testData.all_stubs_error_response;
+                } else if (command instanceof AbortMultipartUploadCommand) {
+                    abortMultipartUploadStubCallCount++;
+                    abortMultipartUploadArgs.push(command.input);
+                    return testData.abortMultipartUploadStub_positive_response;
+                } else if (command instanceof ListPartsCommand) {
+                    listPartsStubCallCount++;
+                    listPartsArgs.push(command.input);
+                    return testData.all_stubs_error_response;
+                }
+            });
+
             const uploadPartCopyStubResponse =
-                await testData.uploadPartCopyStub_positive_response.promise();
+                await testData.uploadPartCopyStub_positive_response;
 
             return s3Module
                 .copyObjectMultipart(
@@ -679,23 +764,23 @@ describe("AWS S3 multupart copy client unit tests", function () {
                         context: "request_context",
                         error: "test_error",
                     });
-                    should(createMultipartUploadStub.calledOnce).equal(true);
-                    should(createMultipartUploadStub.args[0][0]).eql(
+                    should(createMultipartUploadStubCallCount).equal(1);
+                    should(createMultipartUploadArgs[0]).eql(
                         testData.expected_createMultipartUpload_args
                     );
-                    should(uploadPartCopyStub.calledTwice).equal(true);
-                    should(uploadPartCopyStub.args[0][0]).eql(
+                    should(uploadPartCopyStubCallCount).equal(2);
+                    should(uploadPartCopyArgs[0]).eql(
                         testData.expected_uploadPartCopy_firstCallArgs
                     );
-                    should(uploadPartCopyStub.args[1][0]).eql(
+                    should(uploadPartCopyArgs[1]).eql(
                         testData.expected_uploadPartCopy_secondCallArgs
                     );
-                    should(completeMultipartUploadStub.calledOnce).equal(true);
-                    should(completeMultipartUploadStub.args[0][0]).eql(
+                    should(completeMultipartUploadStubCallCount).equal(1);
+                    should(completeMultipartUploadArgs[0]).eql(
                         testData.expected_completeMultipartUploadStub_args
                     );
-                    should(abortMultipartUploadStub.calledOnce).equal(true);
-                    should(abortMultipartUploadStub.args[0][0]).eql(
+                    should(abortMultipartUploadStubCallCount).equal(1);
+                    should(abortMultipartUploadArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
                     should(err).equal("test_error");
