@@ -9,6 +9,7 @@ import {
     UploadPartCopyCommandOutput,
     CompletedPart,
     AbortMultipartUploadCommandInput,
+    CreateMultipartUploadCommandInput,
 } from "@aws-sdk/client-s3";
 import * as _ from "lodash";
 
@@ -64,16 +65,16 @@ export interface CopyObjectMultipartOptions {
     copied_object_name: string;
     object_size: number;
     copy_part_size_bytes?: number;
-    // copied_object_permissions?: any;
-    // expiration_period?: any;
-    // server_side_encryption?: string;
-    // content_type?: string;
-    // content_disposition?: string;
-    // content_encoding?: string;
-    // content_language?: string;
-    // metadata?: Record<string, string>;
-    // cache_control?: any;
-    // storage_class?: any;
+    copied_object_permissions?: string;
+    expiration_period?: Date;
+    server_side_encryption?: string;
+    content_type?: string;
+    content_disposition?: string;
+    content_encoding?: string;
+    content_language?: string;
+    metadata?: Record<string, string>;
+    cache_control?: string;
+    storage_class?: string;
 }
 
 /**
@@ -90,33 +91,33 @@ export async function copyObjectMultipart(
         copied_object_name,
         object_size,
         copy_part_size_bytes,
-    }: // copied_object_permissions,
-    // expiration_period,
-    // server_side_encryption,
-    // content_type,
-    // content_disposition,
-    // content_encoding,
-    // content_language,
-    // metadata,
-    // cache_control,
-    // storage_class,
-    CopyObjectMultipartOptions,
+        copied_object_permissions,
+        expiration_period,
+        server_side_encryption,
+        content_type,
+        content_disposition,
+        content_encoding,
+        content_language,
+        metadata,
+        cache_control,
+        storage_class,
+    }: CopyObjectMultipartOptions,
     request_context: string
 ) {
     const upload_id = await initiateMultipartCopy(
         destination_bucket,
         copied_object_name,
-        // copied_object_permissions,
-        // expiration_period,
-        request_context
-        // server_side_encryption,
-        // content_type,
-        // content_disposition,
-        // content_encoding,
-        // content_language,
-        // metadata,
-        // cache_control,
-        // storage_class
+        copied_object_permissions,
+        expiration_period,
+        request_context,
+        server_side_encryption,
+        content_type,
+        content_disposition,
+        content_encoding,
+        content_language,
+        metadata,
+        cache_control,
+        storage_class
     );
     const partitionsRangeArray = calculatePartitionsRangeArray(
         object_size,
@@ -170,25 +171,34 @@ export async function copyObjectMultipart(
 function initiateMultipartCopy(
     destination_bucket: string,
     copied_object_name: string,
-    // copied_object_permissions?: any,
-    // expiration_period?: any,
-    request_context?: string
-    // server_side_encryption?: string,
-    // content_type?: string,
-    // content_disposition?: string,
-    // content_encoding?: string,
-    // content_language?: string,
-    // metadata?: Record<string, string>,
-    // cache_control?: any,
-    // storage_class?: any
+    copied_object_permissions?: string,
+    expiration_period?: Date,
+    request_context?: string,
+    server_side_encryption?: string,
+    content_type?: string,
+    content_disposition?: string,
+    content_encoding?: string,
+    content_language?: string,
+    metadata?: Record<string, string>,
+    cache_control?: string,
+    storage_class?: string
 ) {
-    const params: CompleteMultipartUploadCommandInput = {
-        UploadId: undefined,
+    const params: CreateMultipartUploadCommandInput = {
         Bucket: destination_bucket,
         Key: copied_object_name,
     };
 
-    delete params.UploadId;
+    params.ACL = copied_object_permissions || DEFAULT_COPIED_OBJECT_PERMISSIONS;
+    if (expiration_period) params.Expires = expiration_period;
+    if (server_side_encryption)
+        params.ServerSideEncryption = server_side_encryption;
+    if (content_type) params.ContentType = content_type;
+    if (content_disposition) params.ContentDisposition = content_disposition;
+    if (content_encoding) params.ContentEncoding = content_encoding;
+    if (content_language) params.ContentLanguage = content_language;
+    if (metadata) params.Metadata = metadata;
+    if (cache_control) params.CacheControl = cache_control;
+    if (storage_class) params.StorageClass = storage_class;
 
     const command = new CreateMultipartUploadCommand(params);
 

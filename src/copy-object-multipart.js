@@ -43,21 +43,9 @@ exports.init = init;
  * (note that copy_part_size_bytes, copied_object_permissions, expiration_period are optional and will be assigned with default values if not given)
  * @param {*} request_context optional parameter for logging purposes
  */
-function copyObjectMultipart({ source_bucket, object_key, destination_bucket, copied_object_name, object_size, copy_part_size_bytes, }, request_context) {
+function copyObjectMultipart({ source_bucket, object_key, destination_bucket, copied_object_name, object_size, copy_part_size_bytes, copied_object_permissions, expiration_period, server_side_encryption, content_type, content_disposition, content_encoding, content_language, metadata, cache_control, storage_class, }, request_context) {
     return __awaiter(this, void 0, void 0, function* () {
-        const upload_id = yield initiateMultipartCopy(destination_bucket, copied_object_name, 
-        // copied_object_permissions,
-        // expiration_period,
-        request_context
-        // server_side_encryption,
-        // content_type,
-        // content_disposition,
-        // content_encoding,
-        // content_language,
-        // metadata,
-        // cache_control,
-        // storage_class
-        );
+        const upload_id = yield initiateMultipartCopy(destination_bucket, copied_object_name, copied_object_permissions, expiration_period, request_context, server_side_encryption, content_type, content_disposition, content_encoding, content_language, metadata, cache_control, storage_class);
         const partitionsRangeArray = calculatePartitionsRangeArray(object_size, copy_part_size_bytes);
         const copyPartFunctionsArray = [];
         partitionsRangeArray.forEach((partitionRange, index) => {
@@ -78,25 +66,30 @@ function copyObjectMultipart({ source_bucket, object_key, destination_bucket, co
     });
 }
 exports.copyObjectMultipart = copyObjectMultipart;
-function initiateMultipartCopy(destination_bucket, copied_object_name, 
-// copied_object_permissions?: any,
-// expiration_period?: any,
-request_context
-// server_side_encryption?: string,
-// content_type?: string,
-// content_disposition?: string,
-// content_encoding?: string,
-// content_language?: string,
-// metadata?: Record<string, string>,
-// cache_control?: any,
-// storage_class?: any
-) {
+function initiateMultipartCopy(destination_bucket, copied_object_name, copied_object_permissions, expiration_period, request_context, server_side_encryption, content_type, content_disposition, content_encoding, content_language, metadata, cache_control, storage_class) {
     const params = {
-        UploadId: undefined,
         Bucket: destination_bucket,
         Key: copied_object_name,
     };
-    delete params.UploadId;
+    params.ACL = copied_object_permissions || DEFAULT_COPIED_OBJECT_PERMISSIONS;
+    if (expiration_period)
+        params.Expires = expiration_period;
+    if (server_side_encryption)
+        params.ServerSideEncryption = server_side_encryption;
+    if (content_type)
+        params.ContentType = content_type;
+    if (content_disposition)
+        params.ContentDisposition = content_disposition;
+    if (content_encoding)
+        params.ContentEncoding = content_encoding;
+    if (content_language)
+        params.ContentLanguage = content_language;
+    if (metadata)
+        params.Metadata = metadata;
+    if (cache_control)
+        params.CacheControl = cache_control;
+    if (storage_class)
+        params.StorageClass = storage_class;
     const command = new client_s3_1.CreateMultipartUploadCommand(params);
     return s3Client
         .send(command)

@@ -206,7 +206,7 @@ describe("AWS S3 multipart copy client unit tests", function () {
             let expected_createMultipartUpload_args = {
                 Bucket: "destination_bucket",
                 Key: "copied_object_name",
-                //ACL: "private",
+                ACL: "private",
             };
 
             return s3Module

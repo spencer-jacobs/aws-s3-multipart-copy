@@ -23,6 +23,16 @@ export interface CopyObjectMultipartOptions {
     copied_object_name: string;
     object_size: number;
     copy_part_size_bytes?: number;
+    copied_object_permissions?: string;
+    expiration_period?: Date;
+    server_side_encryption?: string;
+    content_type?: string;
+    content_disposition?: string;
+    content_encoding?: string;
+    content_language?: string;
+    metadata?: Record<string, string>;
+    cache_control?: string;
+    storage_class?: string;
 }
 /**
  * Throws the error of initiateMultipartCopy in case such occures
@@ -30,4 +40,4 @@ export interface CopyObjectMultipartOptions {
  * (note that copy_part_size_bytes, copied_object_permissions, expiration_period are optional and will be assigned with default values if not given)
  * @param {*} request_context optional parameter for logging purposes
  */
-export declare function copyObjectMultipart({ source_bucket, object_key, destination_bucket, copied_object_name, object_size, copy_part_size_bytes, }: CopyObjectMultipartOptions, request_context: string): Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>;
+export declare function copyObjectMultipart({ source_bucket, object_key, destination_bucket, copied_object_name, object_size, copy_part_size_bytes, copied_object_permissions, expiration_period, server_side_encryption, content_type, content_disposition, content_encoding, content_language, metadata, cache_control, storage_class, }: CopyObjectMultipartOptions, request_context: string): Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>;
