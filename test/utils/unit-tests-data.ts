@@ -1,17 +1,22 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-const copy_object_multipart_1 = require("../../src/copy-object-multipart");
-let expected_abortMultipartUpload_error = new copy_object_multipart_1.ErrorWithDetails("multipart copy aborted");
+import { ErrorWithDetails } from "../../src/copy-object-multipart";
+let expected_abortMultipartUpload_error = new ErrorWithDetails(
+    "multipart copy aborted"
+);
 expected_abortMultipartUpload_error.details = {
     Bucket: "destination_bucket",
     Key: "copied_object_name",
     UploadId: "1a2b3c4d",
 };
-let expected_abort_rejection_response = new copy_object_multipart_1.ErrorWithDetails(expected_abortMultipartUpload_error.message);
+
+let expected_abort_rejection_response = new ErrorWithDetails(
+    expected_abortMultipartUpload_error.message
+);
 expected_abort_rejection_response.details =
     expected_abortMultipartUpload_error.details;
+
 module.exports = {
     request_context: "request_context",
+
     full_request_options: {
         source_bucket: "source_bucket",
         object_key: "object_key",
@@ -92,6 +97,7 @@ module.exports = {
         Key: "copied_object_name",
         UploadId: "1a2b3c4d",
     },
+
     // stubs responses
     uploadPartCopyStub_positive_response: Promise.resolve({
         CopyPartResult: {

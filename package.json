@@ -4,7 +4,7 @@
   "description": "This node js package provides a simple usage for multipart copying between buckets in aws-s3 via the official aws-sdk. It manages the 3 steps required for multipart copy including byte-range offsetting and parts order.",
   "main": "index.js",
   "scripts": {
-    "test": "nyc mocha ./test/unit-tests --recursive"
+    "test": "tsc && nyc mocha ./test/unit-tests --recursive"
   },
   "repository": {
     "type": "git",
@@ -34,10 +34,13 @@
     "report-dir": "coverage"
   },
   "dependencies": {
-    "lodash": "^4.17.21",
-    "@aws-sdk/client-s3": "^3.142.0"
+    "@aws-sdk/client-s3": "^3.142.0",
+    "@aws-sdk/lib-storage": "^3.142.0",
+    "lodash": "^4.17.21"
   },
   "devDependencies": {
+    "@types/lodash": "^4.14.183",
+    "@types/node": "^18.7.6",
     "bunyan": "^1.8.15",
     "deepcopy": "^2.1.0",
     "mocha": "^10.0.0",
@@ -45,6 +48,7 @@
     "pkginfo": "^0.4.1",
     "rewire": "^6.0.0",
     "should": "^13.2.3",
-    "sinon": "^14.0.0"
+    "sinon": "^14.0.0",
+    "typescript": "^4.7.4"
   }
 }

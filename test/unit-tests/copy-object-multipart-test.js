@@ -206,7 +206,7 @@ describe("AWS S3 multipart copy client unit tests", function () {
             let expected_createMultipartUpload_args = {
                 Bucket: "destination_bucket",
                 Key: "copied_object_name",
-                ACL: "private",
+                //ACL: "private",
             };
 
             return s3Module
@@ -391,13 +391,6 @@ describe("AWS S3 multipart copy client unit tests", function () {
                 }
             });
 
-            let expected_error = new Error("multipart copy aborted");
-            expected_error.details = {
-                Bucket: "destination_bucket",
-                Key: "copied_object_name",
-                UploadId: "1a2b3c4d",
-            };
-
             return s3Module
                 .copyObjectMultipart(
                     testData.full_request_options,
@@ -444,7 +437,11 @@ describe("AWS S3 multipart copy client unit tests", function () {
                     should(listPartsArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
-                    should(err).eql(testData.expected_abort_rejection_response);
+                    should(JSON.stringify(err)).eql(
+                        JSON.stringify(
+                            testData.expected_abort_rejection_response
+                        )
+                    );
                 });
         });
 
@@ -520,7 +517,11 @@ describe("AWS S3 multipart copy client unit tests", function () {
                     should(listPartsArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
-                    should(err).eql(testData.expected_abort_rejection_response);
+                    should(JSON.stringify(err)).eql(
+                        JSON.stringify(
+                            testData.expected_abort_rejection_response
+                        )
+                    );
                 });
         });
 
@@ -589,11 +590,13 @@ describe("AWS S3 multipart copy client unit tests", function () {
                         context: "request_context",
                         error: "test_error",
                     });
-                    should(loggerErrorSpy.args[1][0]).eql({
-                        msg: "abort multipart copy failed, copy parts were not removed",
-                        context: "request_context",
-                        error,
-                    });
+                    should(JSON.stringify(loggerErrorSpy.args[1][0])).eql(
+                        JSON.stringify({
+                            msg: "abort multipart copy failed, copy parts were not removed",
+                            context: "request_context",
+                            error,
+                        })
+                    );
                     should(createMultipartUploadStubCallCount).equal(1);
                     should(createMultipartUploadArgs[0]).eql(
                         testData.expected_createMultipartUpload_args
@@ -617,7 +620,9 @@ describe("AWS S3 multipart copy client unit tests", function () {
                     should(listPartsArgs[0]).eql(
                         testData.expected_abortMultipartUploadStub_args
                     );
-                    should(err).eql(expected_abortMultipartUpload_error);
+                    should(JSON.stringify(err)).eql(
+                        JSON.stringify(expected_abortMultipartUpload_error)
+                    );
                 });
         });
 
