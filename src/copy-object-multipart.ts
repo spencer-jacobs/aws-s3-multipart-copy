@@ -17,8 +17,18 @@ const DEFAULT_COPY_PART_SIZE_BYTES = 50000000; // 50 MB in bytes
 const DEFAULT_COPIED_OBJECT_PERMISSIONS = "private";
 
 export interface Logger {
-    info: Function;
-    error: Function;
+    info: (arg: LoggerInfoArgument) => any;
+    error: (arg: LoggerErrorArgument) => any;
+}
+export interface LoggerInfoArgument {
+    msg: string;
+    context?: string;
+}
+
+export interface LoggerErrorArgument {
+    msg: string;
+    error?: ErrorWithDetails;
+    context?: string;
 }
 
 export class ErrorWithDetails extends Error {

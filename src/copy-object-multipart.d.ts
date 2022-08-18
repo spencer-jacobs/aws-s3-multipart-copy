@@ -1,7 +1,16 @@
 import { S3Client } from "@aws-sdk/client-s3";
 export interface Logger {
-    info: Function;
-    error: Function;
+    info: (arg: LoggerInfoArgument) => any;
+    error: (arg: LoggerErrorArgument) => any;
+}
+export interface LoggerInfoArgument {
+    msg: string;
+    context?: string;
+}
+export interface LoggerErrorArgument {
+    msg: string;
+    error?: ErrorWithDetails;
+    context?: string;
 }
 export declare class ErrorWithDetails extends Error {
     details?: any;
