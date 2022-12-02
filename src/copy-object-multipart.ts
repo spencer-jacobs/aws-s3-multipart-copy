@@ -417,9 +417,3 @@ function prepareResultsForCopyCompletion(
 
     return resultArray;
 }
-
-module.exports = {
-    init,
-    copyObjectMultipart,
-    ErrorWithDetails,
-};
