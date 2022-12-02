@@ -65,3 +65,4 @@ poc.js
 
 # typescript output for testing
 compiledTypescript/
+dist/
