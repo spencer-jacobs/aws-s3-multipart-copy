@@ -1,5 +1,4 @@
-import * as _aws_sdk_client_s3 from '@aws-sdk/client-s3';
-import { S3Client } from '@aws-sdk/client-s3';
+import { S3Client, CompleteMultipartUploadCommandOutput, AbortMultipartUploadCommandOutput } from '@aws-sdk/client-s3';
 
 interface Logger {
     info: (arg: LoggerInfoArgument) => any;
@@ -17,7 +16,6 @@ interface LoggerErrorArgument {
 declare class ErrorWithDetails extends Error {
     details?: any;
 }
-declare function init(client: S3Client, initialized_logger: Logger): void;
 interface CopyObjectMultipartOptions {
     source_bucket: string;
     object_key: string;
@@ -36,12 +34,34 @@ interface CopyObjectMultipartOptions {
     cache_control?: string;
     storage_class?: string;
 }
-/**
- * Throws the error of initiateMultipartCopy in case such occures
- * @param {*} options an object of parameters obligated to hold the below keys
- * (note that copy_part_size_bytes, copied_object_permissions, expiration_period are optional and will be assigned with default values if not given)
- * @param {*} request_context optional parameter for logging purposes
- */
-declare function copyObjectMultipart({ source_bucket, object_key, destination_bucket, copied_object_name, object_size, copy_part_size_bytes, copied_object_permissions, expiration_period, server_side_encryption, content_type, content_disposition, content_encoding, content_language, metadata, cache_control, storage_class, }: CopyObjectMultipartOptions, request_context: string): Promise<_aws_sdk_client_s3.CompleteMultipartUploadCommandOutput>;
+interface Options {
+    abortController?: AbortController;
+    logger?: Logger;
+    s3Client: S3Client;
+    params: CopyObjectMultipartOptions;
+}
+declare class CopyMultipart {
+    s3Client: S3Client;
+    logger: Logger;
+    abortController: AbortController;
+    params: CopyObjectMultipartOptions;
+    uploadId: string | undefined;
+    constructor(options: Options);
+    abort(): Promise<void>;
+    done(): Promise<CompleteMultipartUploadCommandOutput | AbortMultipartUploadCommandOutput>;
+    private __doMultipartCopy;
+    private __abortTimeout;
+    /**
+     * Throws the error of initiateMultipartCopy in case such occures
+     * @param {*} options an object of parameters obligated to hold the below keys
+     * (note that copy_part_size_bytes, copied_object_permissions, expiration_period are optional and will be assigned with default values if not given)
+     * @param {*} request_context optional parameter for logging purposes
+     */
+    private copyObjectMultipart;
+    private initiateMultipartCopy;
+    private copyPart;
+    private abortMultipartCopy;
+    private completeMultipartCopy;
+}
 
-export { CopyObjectMultipartOptions, ErrorWithDetails, Logger, LoggerErrorArgument, LoggerInfoArgument, copyObjectMultipart, init };
+export { CopyMultipart, CopyObjectMultipartOptions, ErrorWithDetails, Logger, LoggerErrorArgument, LoggerInfoArgument, Options };
