@@ -1,4 +1,5 @@
 import { S3Client, CompleteMultipartUploadCommandOutput, AbortMultipartUploadCommandOutput } from '@aws-sdk/client-s3';
+import { AbortSignal } from '@aws-sdk/types';
 
 interface Logger {
     info: (arg: LoggerInfoArgument) => any;
@@ -44,6 +45,7 @@ declare class CopyMultipart {
     s3Client: S3Client;
     logger: Logger;
     abortController: AbortController;
+    abortSignal: AbortSignal;
     params: CopyObjectMultipartOptions;
     uploadId: string | undefined;
     constructor(options: Options);

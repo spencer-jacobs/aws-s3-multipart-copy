@@ -13,6 +13,7 @@ import {
     CompleteMultipartUploadCommandOutput,
     AbortMultipartUploadCommandOutput,
 } from "@aws-sdk/client-s3";
+import { AbortSignal } from "@aws-sdk/types";
 import * as _ from "lodash";
 
 const COPY_PART_SIZE_MINIMUM_BYTES = 5242880; // 5MB in bytes
@@ -68,6 +69,7 @@ export class CopyMultipart {
     s3Client: S3Client;
     logger: Logger;
     abortController: AbortController;
+    abortSignal: AbortSignal;
     params: CopyObjectMultipartOptions;
 
     uploadId: string | undefined;
@@ -77,6 +79,7 @@ export class CopyMultipart {
         this.s3Client = options.s3Client;
         this.params = options.params;
         this.abortController = options.abortController ?? new AbortController();
+        this.abortSignal = this.abortController.signal as AbortSignal;
     }
     async abort(): Promise<void> {
         /**
@@ -91,7 +94,7 @@ export class CopyMultipart {
     > {
         return await Promise.race([
             this.__doMultipartCopy(),
-            this.__abortTimeout(this.abortController.signal),
+            this.__abortTimeout(this.abortSignal),
         ]);
     }
 
@@ -251,7 +254,9 @@ export class CopyMultipart {
         const command = new CreateMultipartUploadCommand(params);
 
         return this.s3Client
-            .send(command)
+            .send(command, {
+                abortSignal: this.abortSignal,
+            })
             .then((result) => {
                 this.logger.info({
                     msg: `multipart copy initiated successfully: ${JSON.stringify(
@@ -299,7 +304,9 @@ export class CopyMultipart {
         const command = new UploadPartCopyCommand(params);
 
         return this.s3Client
-            .send(command)
+            .send(command, {
+                abortSignal: this.abortSignal,
+            })
             .then((result) => {
                 this.logger.info({
                     msg: `CopyPart ${part_number} succeeded: ${JSON.stringify(
@@ -334,7 +341,9 @@ export class CopyMultipart {
         const command = new AbortMultipartUploadCommand(params);
 
         return this.s3Client
-            .send(command)
+            .send(command, {
+                abortSignal: this.abortSignal,
+            })
             .then(() => {
                 const listCommand = new ListPartsCommand(params);
                 return this.s3Client.send(listCommand);
@@ -397,7 +406,9 @@ export class CopyMultipart {
         const command = new CompleteMultipartUploadCommand(params);
 
         return this.s3Client
-            .send(command)
+            .send(command, {
+                abortSignal: this.abortSignal,
+            })
             .then((result) => {
                 this.logger.info({
                     msg: `multipart copy completed successfully: ${JSON.stringify(
