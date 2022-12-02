@@ -136,14 +136,6 @@ var CopyMultipart = class {
           )}`,
           context: request_context
         });
-        if (copy_results.length === 1) {
-          const result = {
-            $metadata: {},
-            Bucket: this.params.destination_bucket,
-            Key: this.params.object_key
-          };
-          return Promise.resolve(result);
-        }
         const copyResultsForCopyCompletion = prepareResultsForCopyCompletion(copy_results);
         return this.completeMultipartCopy(
           destination_bucket,
@@ -299,7 +291,7 @@ var CopyMultipart = class {
       return Promise.resolve(result);
     }).catch((err) => {
       this.logger.error({
-        msg: `Multipart upload failed: ${JSON.stringify(params)}`,
+        msg: "Multipart upload failed",
         context: request_context,
         error: err
       });

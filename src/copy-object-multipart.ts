@@ -168,7 +168,6 @@ export class CopyMultipart {
             object_size,
             copy_part_size_bytes
         );
-
         const copyPartFunctionsArray: Promise<UploadPartCopyCommandOutput>[] =
             [];
 
@@ -194,16 +193,6 @@ export class CopyMultipart {
                     )}`,
                     context: request_context,
                 });
-
-                if (copy_results.length === 1) {
-                    //Don't send the complete multipart upload command when there was only one part
-                    const result: CompleteMultipartUploadCommandOutput = {
-                        $metadata: {},
-                        Bucket: this.params.destination_bucket,
-                        Key: this.params.object_key,
-                    };
-                    return Promise.resolve(result);
-                }
 
                 const copyResultsForCopyCompletion =
                     prepareResultsForCopyCompletion(copy_results);
@@ -420,7 +409,7 @@ export class CopyMultipart {
             })
             .catch((err) => {
                 this.logger.error({
-                    msg: `Multipart upload failed: ${JSON.stringify(params)}`,
+                    msg: "Multipart upload failed",
                     context: request_context,
                     error: err,
                 });
