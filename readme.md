@@ -4,6 +4,8 @@
 [![NPM Downloads][downloads-image]][downloads-url]
 [![NSP Status](https://nodesecurity.io/orgs/zooz/projects/5da31d63-65ef-4580-9989-b412767fa9cb/badge)](https://nodesecurity.io/orgs/zooz/projects/5da31d63-65ef-4580-9989-b412767fa9cb)
 
+Forked from https://github.com/Zooz/aws-s3-multipart-copy
+
 # aws-s3-multipart-copy
 
 Wraps [aws-sdk](https://www.npmjs.com/package/aws-sdk) with a multipart-copy manager, in order to provide an easy way to copy large objects from one bucket to another in aws-s3.
