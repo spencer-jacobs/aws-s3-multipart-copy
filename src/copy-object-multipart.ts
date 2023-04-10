@@ -12,13 +12,14 @@ import {
     CreateMultipartUploadCommandInput,
     CompleteMultipartUploadCommandOutput,
     AbortMultipartUploadCommandOutput,
-} from "@aws-sdk/client-s3";
-import { AbortSignal } from "@aws-sdk/types";
-import * as _ from "lodash";
+    UploadPartCopyCommandInput,
+} from '@aws-sdk/client-s3';
+import { AbortSignal } from '@aws-sdk/types';
+import { from, Subject } from 'rxjs';
 
 const COPY_PART_SIZE_MINIMUM_BYTES = 5242880; // 5MB in bytes
 const DEFAULT_COPY_PART_SIZE_BYTES = 50000000; // 50 MB in bytes
-const DEFAULT_COPIED_OBJECT_PERMISSIONS = "private";
+const DEFAULT_COPIED_OBJECT_PERMISSIONS = 'private';
 
 export interface Logger {
     info: (arg: LoggerInfoArgument) => any;
@@ -71,6 +72,9 @@ export class CopyMultipart {
     abortController: AbortController;
     abortSignal: AbortSignal;
     params: CopyObjectMultipartOptions;
+    processedBytes: number;
+
+    processedBytesSubject: Subject<number>;
 
     uploadId: string | undefined;
 
@@ -80,7 +84,14 @@ export class CopyMultipart {
         this.params = options.params;
         this.abortController = options.abortController ?? new AbortController();
         this.abortSignal = this.abortController.signal as AbortSignal;
+        this.processedBytes = 0;
+        this.processedBytesSubject = new Subject<number>();
     }
+
+    public observableProcessedBytes() {
+        return from(this.processedBytesSubject);
+    }
+
     async abort(): Promise<void> {
         /**
          * Abort stops all new uploads and immediately exits the top level promise on this.done()
@@ -99,7 +110,7 @@ export class CopyMultipart {
     }
 
     private async __doMultipartCopy(): Promise<CompleteMultipartUploadCommandOutput> {
-        return this.copyObjectMultipart(this.params, "");
+        return this.copyObjectMultipart(this.params, '');
     }
 
     private async __abortTimeout(
@@ -107,14 +118,14 @@ export class CopyMultipart {
     ): Promise<AbortMultipartUploadCommandOutput> {
         return new Promise((resolve, reject) => {
             abortSignal.onabort = () => {
-                const abortError = new Error("Upload aborted.");
-                abortError.name = "AbortError";
+                const abortError = new Error('Upload aborted.');
+                abortError.name = 'AbortError';
 
                 this.abortMultipartCopy(
                     this.params.destination_bucket,
                     this.params.copied_object_name,
                     this.uploadId,
-                    ""
+                    ''
                 ).then(() => {
                     reject(abortError);
                 });
@@ -268,7 +279,7 @@ export class CopyMultipart {
             })
             .catch((err) => {
                 this.logger.error({
-                    msg: "multipart copy failed to initiate",
+                    msg: 'multipart copy failed to initiate',
                     context: request_context,
                     error: err,
                 });
@@ -281,24 +292,24 @@ export class CopyMultipart {
         destination_bucket: string,
         part_number: number,
         object_key: string,
-        partition_range: string,
+        partition: Partition,
         copied_object_name: string,
         upload_id: string | undefined
     ) {
         const encodedSourceKey = encodeURIComponent(
             `${source_bucket}/${object_key}`
         );
-        const params = {
+        const params: UploadPartCopyCommandInput = {
             Bucket: destination_bucket,
             CopySource: encodedSourceKey,
-            CopySourceRange: "bytes=" + partition_range,
+            CopySourceRange: 'bytes=' + partition.byteRange,
             Key: copied_object_name,
             PartNumber: part_number,
             UploadId: upload_id,
         };
 
         if (this.abortController.signal.aborted) {
-            return Promise.reject("Aborted");
+            return Promise.reject('Aborted');
         }
 
         const command = new UploadPartCopyCommand(params);
@@ -313,6 +324,8 @@ export class CopyMultipart {
                         result
                     )}`,
                 });
+                this.processedBytes += partition.size;
+                this.processedBytesSubject.next(this.processedBytes);
                 return Promise.resolve(result);
             })
             .catch((err) => {
@@ -350,7 +363,7 @@ export class CopyMultipart {
             })
             .catch((err) => {
                 this.logger.error({
-                    msg: "abort multipart copy failed",
+                    msg: 'abort multipart copy failed',
                     context: request_context,
                     error: err,
                 });
@@ -360,12 +373,12 @@ export class CopyMultipart {
             .then((parts_list) => {
                 if (parts_list.Parts && parts_list.Parts.length > 0) {
                     const err = new ErrorWithDetails(
-                        "Abort procedure passed but copy parts were not removed"
+                        'Abort procedure passed but copy parts were not removed'
                     );
                     err.details = parts_list;
 
                     this.logger.error({
-                        msg: "abort multipart copy failed, copy parts were not removed",
+                        msg: 'abort multipart copy failed, copy parts were not removed',
                         context: request_context,
                         error: err,
                     });
@@ -379,7 +392,7 @@ export class CopyMultipart {
                         context: request_context,
                     });
 
-                    const err = new ErrorWithDetails("multipart copy aborted");
+                    const err = new ErrorWithDetails('multipart copy aborted');
                     err.details = params;
 
                     return Promise.reject(err);
@@ -416,14 +429,16 @@ export class CopyMultipart {
                     )}`,
                     context: request_context,
                 });
+                this.processedBytesSubject.complete();
                 return Promise.resolve(result);
             })
             .catch((err) => {
                 this.logger.error({
-                    msg: "Multipart upload failed",
+                    msg: 'Multipart upload failed',
                     context: request_context,
                     error: err,
                 });
+                this.processedBytesSubject.error(err);
                 return Promise.reject(err);
             });
     }
@@ -446,11 +461,16 @@ function prepareResultsForCopyCompletion(
     return resultArray;
 }
 
+type Partition = {
+    byteRange: string;
+    size: number;
+};
+
 function calculatePartitionsRangeArray(
     object_size: number,
     copy_part_size_bytes?: number
 ) {
-    const partitions: string[] = [];
+    const partitions: Partition[] = [];
     const copy_part_size = copy_part_size_bytes || DEFAULT_COPY_PART_SIZE_BYTES;
     const numOfPartitions = Math.floor(object_size / copy_part_size);
     const remainder = object_size % copy_part_size;
@@ -458,27 +478,36 @@ function calculatePartitionsRangeArray(
 
     for (index = 0; index < numOfPartitions; index++) {
         const nextIndex = index + 1;
+
+        let start = 0,
+            end = 0,
+            size = 0;
         if (
             nextIndex === numOfPartitions &&
             remainder < COPY_PART_SIZE_MINIMUM_BYTES
         ) {
-            partition =
-                index * copy_part_size +
-                "-" +
-                (nextIndex * copy_part_size + remainder - 1);
+            start = index * copy_part_size;
+            end = nextIndex * copy_part_size + remainder - 1;
+            size = remainder;
         } else {
-            partition =
-                index * copy_part_size + "-" + (nextIndex * copy_part_size - 1);
+            start = index * copy_part_size;
+            end = nextIndex * copy_part_size - 1;
+            size = copy_part_size;
         }
-        partitions.push(partition);
+
+        const byteRange = `${start}-${end}`;
+
+        partitions.push({ byteRange, size });
     }
 
     if (numOfPartitions == 0 || remainder >= COPY_PART_SIZE_MINIMUM_BYTES) {
-        partition =
-            index * copy_part_size +
-            "-" +
-            (index * copy_part_size + remainder - 1);
-        partitions.push(partition);
+        const start = index * copy_part_size;
+        const end = index * copy_part_size + remainder - 1;
+        const size = remainder;
+
+        const byteRange = `${start}-${end}`;
+
+        partitions.push({ byteRange, size });
     }
 
     return partitions;

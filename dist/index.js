@@ -27,6 +27,7 @@
 
 
 var _clients3 = require('@aws-sdk/client-s3');
+var _rxjs = require('rxjs');
 var COPY_PART_SIZE_MINIMUM_BYTES = 5242880;
 var DEFAULT_COPY_PART_SIZE_BYTES = 5e7;
 var DEFAULT_COPIED_OBJECT_PERMISSIONS = "private";
@@ -40,6 +41,11 @@ var CopyMultipart = class {
     this.params = options.params;
     this.abortController = (_a = options.abortController) != null ? _a : new AbortController();
     this.abortSignal = this.abortController.signal;
+    this.processedBytes = 0;
+    this.processedBytesSubject = new (0, _rxjs.Subject)();
+  }
+  observableProcessedBytes() {
+    return _rxjs.from.call(void 0, this.processedBytesSubject);
   }
   abort() {
     return __async(this, null, function* () {
@@ -199,14 +205,14 @@ var CopyMultipart = class {
       return Promise.reject(err);
     });
   }
-  copyPart(source_bucket, destination_bucket, part_number, object_key, partition_range, copied_object_name, upload_id) {
+  copyPart(source_bucket, destination_bucket, part_number, object_key, partition, copied_object_name, upload_id) {
     const encodedSourceKey = encodeURIComponent(
       `${source_bucket}/${object_key}`
     );
     const params = {
       Bucket: destination_bucket,
       CopySource: encodedSourceKey,
-      CopySourceRange: "bytes=" + partition_range,
+      CopySourceRange: "bytes=" + partition.byteRange,
       Key: copied_object_name,
       PartNumber: part_number,
       UploadId: upload_id
@@ -223,6 +229,8 @@ var CopyMultipart = class {
           result
         )}`
       });
+      this.processedBytes += partition.size;
+      this.processedBytesSubject.next(this.processedBytes);
       return Promise.resolve(result);
     }).catch((err) => {
       this.logger.error({
@@ -297,6 +305,7 @@ var CopyMultipart = class {
         )}`,
         context: request_context
       });
+      this.processedBytesSubject.complete();
       return Promise.resolve(result);
     }).catch((err) => {
       this.logger.error({
@@ -304,6 +313,7 @@ var CopyMultipart = class {
         context: request_context,
         error: err
       });
+      this.processedBytesSubject.error(err);
       return Promise.reject(err);
     });
   }
@@ -328,16 +338,25 @@ function calculatePartitionsRangeArray(object_size, copy_part_size_bytes) {
   let index, partition;
   for (index = 0; index < numOfPartitions; index++) {
     const nextIndex = index + 1;
+    let start = 0, end = 0, size = 0;
     if (nextIndex === numOfPartitions && remainder < COPY_PART_SIZE_MINIMUM_BYTES) {
-      partition = index * copy_part_size + "-" + (nextIndex * copy_part_size + remainder - 1);
+      start = index * copy_part_size;
+      end = nextIndex * copy_part_size + remainder - 1;
+      size = remainder;
     } else {
-      partition = index * copy_part_size + "-" + (nextIndex * copy_part_size - 1);
+      start = index * copy_part_size;
+      end = nextIndex * copy_part_size - 1;
+      size = copy_part_size;
     }
-    partitions.push(partition);
+    const byteRange = `${start}-${end}`;
+    partitions.push({ byteRange, size });
   }
   if (numOfPartitions == 0 || remainder >= COPY_PART_SIZE_MINIMUM_BYTES) {
-    partition = index * copy_part_size + "-" + (index * copy_part_size + remainder - 1);
-    partitions.push(partition);
+    const start = index * copy_part_size;
+    const end = index * copy_part_size + remainder - 1;
+    const size = remainder;
+    const byteRange = `${start}-${end}`;
+    partitions.push({ byteRange, size });
   }
   return partitions;
 }

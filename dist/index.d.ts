@@ -1,3 +1,5 @@
+import * as rxjs from 'rxjs';
+import { Subject } from 'rxjs';
 import { S3Client, CompleteMultipartUploadCommandOutput, AbortMultipartUploadCommandOutput } from '@aws-sdk/client-s3';
 import { AbortSignal } from '@aws-sdk/types';
 
@@ -47,8 +49,11 @@ declare class CopyMultipart {
     abortController: AbortController;
     abortSignal: AbortSignal;
     params: CopyObjectMultipartOptions;
+    processedBytes: number;
+    processedBytesSubject: Subject<number>;
     uploadId: string | undefined;
     constructor(options: Options);
+    observableProcessedBytes(): rxjs.Observable<number>;
     abort(): Promise<void>;
     done(): Promise<CompleteMultipartUploadCommandOutput | AbortMultipartUploadCommandOutput>;
     private __doMultipartCopy;
