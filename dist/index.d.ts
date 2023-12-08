@@ -2,6 +2,7 @@ import * as rxjs from 'rxjs';
 import { Subject } from 'rxjs';
 import { S3Client, CompleteMultipartUploadCommandOutput, AbortMultipartUploadCommandOutput } from '@aws-sdk/client-s3';
 import { AbortSignal } from '@aws-sdk/types';
+import Bottleneck from 'bottleneck';
 
 interface Logger {
     info: (arg: LoggerInfoArgument) => any;
@@ -42,6 +43,7 @@ interface Options {
     logger?: Logger;
     s3Client: S3Client;
     params: CopyObjectMultipartOptions;
+    maxConcurrentParts?: number;
 }
 declare class CopyMultipart {
     s3Client: S3Client;
@@ -50,6 +52,7 @@ declare class CopyMultipart {
     abortSignal: AbortSignal;
     params: CopyObjectMultipartOptions;
     processedBytes: number;
+    bottleneck: Bottleneck;
     processedBytesSubject: Subject<number>;
     uploadId: string | undefined;
     constructor(options: Options);

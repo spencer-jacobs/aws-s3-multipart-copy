@@ -1,4 +1,4 @@
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});var __async = (__this, __arguments, generator) => {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }var __async = (__this, __arguments, generator) => {
   return new Promise((resolve, reject) => {
     var fulfilled = (value) => {
       try {
@@ -27,6 +27,7 @@
 
 
 var _clients3 = require('@aws-sdk/client-s3');
+var _bottleneck = require('bottleneck'); var _bottleneck2 = _interopRequireDefault(_bottleneck);
 var _rxjs = require('rxjs');
 var COPY_PART_SIZE_MINIMUM_BYTES = 5242880;
 var DEFAULT_COPY_PART_SIZE_BYTES = 5e7;
@@ -35,7 +36,7 @@ var ErrorWithDetails = class extends Error {
 };
 var CopyMultipart = class {
   constructor(options) {
-    var _a;
+    var _a, _b;
     this.logger = options.logger || getDefaultLogger();
     this.s3Client = options.s3Client;
     this.params = options.params;
@@ -43,6 +44,9 @@ var CopyMultipart = class {
     this.abortSignal = this.abortController.signal;
     this.processedBytes = 0;
     this.processedBytesSubject = new (0, _rxjs.Subject)();
+    this.bottleneck = new (0, _bottleneck2.default)({
+      maxConcurrent: (_b = options.maxConcurrentParts) != null ? _b : 4
+    });
   }
   observableProcessedBytes() {
     return _rxjs.from.call(void 0, this.processedBytesSubject);
@@ -124,8 +128,8 @@ var CopyMultipart = class {
       );
       const copyPartFunctionsArray = [];
       partitionsRangeArray.forEach((partitionRange, index) => {
-        copyPartFunctionsArray.push(
-          this.copyPart(
+        const copyPartFunction = () => {
+          return this.copyPart(
             source_bucket,
             destination_bucket,
             index + 1,
@@ -133,8 +137,10 @@ var CopyMultipart = class {
             partitionRange,
             copied_object_name,
             upload_id
-          )
-        );
+          );
+        };
+        const promise = this.bottleneck.schedule(copyPartFunction);
+        copyPartFunctionsArray.push(promise);
       });
       return Promise.all(copyPartFunctionsArray).then((copy_results) => {
         this.logger.info({

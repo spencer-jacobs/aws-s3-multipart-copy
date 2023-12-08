@@ -15,6 +15,7 @@ import {
     UploadPartCopyCommandInput,
 } from '@aws-sdk/client-s3';
 import { AbortSignal } from '@aws-sdk/types';
+import Bottleneck from 'bottleneck';
 import { from, Subject } from 'rxjs';
 
 const COPY_PART_SIZE_MINIMUM_BYTES = 5242880; // 5MB in bytes
@@ -64,6 +65,7 @@ export interface Options {
     logger?: Logger;
     s3Client: S3Client;
     params: CopyObjectMultipartOptions;
+    maxConcurrentParts?: number;
 }
 
 export class CopyMultipart {
@@ -73,6 +75,7 @@ export class CopyMultipart {
     abortSignal: AbortSignal;
     params: CopyObjectMultipartOptions;
     processedBytes: number;
+    bottleneck: Bottleneck;
 
     processedBytesSubject: Subject<number>;
 
@@ -86,6 +89,9 @@ export class CopyMultipart {
         this.abortSignal = this.abortController.signal as AbortSignal;
         this.processedBytes = 0;
         this.processedBytesSubject = new Subject<number>();
+        this.bottleneck = new Bottleneck({
+            maxConcurrent: options.maxConcurrentParts ?? 4,
+        });
     }
 
     public observableProcessedBytes() {
@@ -186,8 +192,8 @@ export class CopyMultipart {
             [];
 
         partitionsRangeArray.forEach((partitionRange, index) => {
-            copyPartFunctionsArray.push(
-                this.copyPart(
+            const copyPartFunction = () => {
+                return this.copyPart(
                     source_bucket,
                     destination_bucket,
                     index + 1,
@@ -195,8 +201,10 @@ export class CopyMultipart {
                     partitionRange,
                     copied_object_name,
                     upload_id
-                )
-            );
+                );
+            };
+            const promise = this.bottleneck.schedule(copyPartFunction);
+            copyPartFunctionsArray.push(promise);
         });
 
         return Promise.all(copyPartFunctionsArray)
